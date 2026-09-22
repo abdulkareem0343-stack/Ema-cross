@@ -57,7 +57,7 @@ def check_crossover(exchange_id, symbol, tf):
             status = None
             crossed_candle_ago = None
 
-            # Rule 2: Check Crossover in last 5 candles (idx: -2 to -6)
+            # Rule 2: Check Crossover in last 5 candles
             for i in range(1, 6):
                 prev = df.iloc[-(i + 2)]
                 curr = df.iloc[-(i + 1)]
@@ -67,7 +67,7 @@ def check_crossover(exchange_id, symbol, tf):
                     status = f"🚀 Bullish Cross ({i} candle{'s' if i > 1 else ''} ago)"
                     break
 
-            # Near Crossover Check (if not crossed yet)
+            # Near Crossover Check
             if not status:
                 row_0 = df.iloc[-1]
                 diff_percent = abs(row_0['EMA14'] - row_0['EMA50']) / row_0['EMA50'] * 100
@@ -80,11 +80,11 @@ def check_crossover(exchange_id, symbol, tf):
                     "Exchange": exchange_id.upper(),
                     "Symbol": symbol,
                     "Status": status,
-                    "Candles Ago": crossed_candle_ago if crossed_candle_ago is not None else "Near",
+                    "Candles Ago": crossed_candle_ago if crossed_candle_ago is not None else 99,
                     "Price": current_price,
-                    "EMA 14": round(df.iloc[-1]['EMA14'], 4),
-                    "EMA 50": round(df.iloc[-1]['EMA50'], 4),
-                    "EMA 200": round(ema200, 4)
+                    "EMA14": round(df.iloc[-1]['EMA14'], 4),
+                    "EMA50": round(df.iloc[-1]['EMA50'], 4),
+                    "EMA200": round(ema200, 4)
                 }
     except Exception:
         pass
@@ -114,18 +114,43 @@ if st.button("🚀 Fast Scan Now"):
                 completed_count += 1
                 progress_bar.progress(completed_count / total_coins)
 
-        # --- ADVANCED METRICS BOXES ---
+        # --- SUMMARY METRICS ---
         st.write("---")
         m1, m2, m3 = st.columns(3)
         m1.metric(label="Total Scanned", value=f"{len(symbols)} Coins")
         m2.metric(label="Matches Found", value=f"{len(results)} Coins", delta=f"{len(results)} Opportunities" if results else "0")
         
-        fresh_crosses = len([r for r in results if isinstance(r['Candles Ago'], int) and r['Candles Ago'] <= 2])
+        fresh_crosses = len([r for r in results if r['Candles Ago'] <= 2])
         m3.metric(label="Fresh Crosses (1-2 Candles)", value=f"{fresh_crosses}")
         st.write("---")
 
         if results:
-            df_results = pd.DataFrame(results).sort_values(by="Candles Ago", ascending=True)
-            st.dataframe(df_results, use_container_width=True)
+            # Sort results by recent crossover
+            sorted_results = sorted(results, key=lambda x: x['Candles Ago'])
+            
+            st.subheader("🎯 Matched Opportunities Cards")
+            
+            # Grid Layout: Displaying 3 Coin Cards per Row
+            cols_per_row = 3
+            for i in range(0, len(sorted_results), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j in range(cols_per_row):
+                    if i + j < len(sorted_results):
+                        coin = sorted_results[i + j]
+                        with cols[j]:
+                            with st.container(border=True):
+                                st.markdown(f"### 🪙 {coin['Symbol']}")
+                                st.caption(f"Exchange: **{coin['Exchange']}** | Timeframe: **{timeframe}**")
+                                st.success(f"{coin['Status']}")
+                                
+                                # Details inside the card
+                                c1, c2 = st.columns(2)
+                                c1.metric("Current Price", f"${coin['Price']}")
+                                c2.metric("EMA 200", f"${coin['EMA200']}")
+                                
+                                st.write("---")
+                                sub_c1, sub_c2 = st.columns(2)
+                                sub_c1.write(f"**EMA 14:** `{coin['EMA14']}`")
+                                sub_c2.write(f"**EMA 50:** `{coin['EMA50']}`")
         else:
             st.warning("No coins matched the condition within last 5 candles.")
