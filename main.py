@@ -10,7 +10,8 @@ st.write("Coins with **Price < EMA 200** & **EMA 14 crossed EMA 50 within last 5
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    exchange_choice = st.selectbox("Select Exchange:", ["binance", "kucoin"])
+    # MEXC & Bybit are recommended for 100% working & no restriction errors
+    exchange_choice = st.selectbox("Select Exchange:", ["mexc", "bybit", "kucoin", "binance"], index=0)
 with col2:
     timeframe = st.selectbox("Select Timeframe:", ["15m", "1h", "4h", "1d"], index=0)
 with col3:
@@ -23,13 +24,16 @@ def get_exchange_instance(exchange_id):
             'timeout': 5000,
             'urls': {
                 'api': {
-                    'public': 'https://data-api.binance.vision/api/v3',
-                    'fapiPublic': 'https://fapi.binance.com/fapi/v1'
+                    'public': 'https://data-api.binance.vision/api/v3'
                 }
             }
         })
+    elif exchange_id == 'mexc':
+        return ccxt.mexc({'enableRateLimit': False, 'timeout': 5000})
+    elif exchange_id == 'bybit':
+        return ccxt.bybit({'enableRateLimit': False, 'timeout': 5000})
     else:
-        return getattr(ccxt, exchange_id)({'enableRateLimit': False, 'timeout': 5000})
+        return ccxt.kucoin({'enableRateLimit': False, 'timeout': 5000})
 
 @st.cache_data(ttl=300)
 def fetch_exchange_pairs(exchange_id, limit):
@@ -39,8 +43,8 @@ def fetch_exchange_pairs(exchange_id, limit):
         
         usdt_pairs = []
         for symbol, ticker in tickers.items():
-            if symbol.endswith('/USDT') and 'UP/' not in symbol and 'DOWN/' not in symbol:
-                vol = ticker.get('quoteVolume') or 0
+            if symbol.endswith('/USDT') and 'UP/' not in symbol and 'DOWN/' not in symbol and 'BEAR/' not in symbol and 'BULL/' not in symbol:
+                vol = ticker.get('quoteVolume') or ticker.get('baseVolume') or 0
                 usdt_pairs.append({'symbol': symbol, 'volume': vol})
         
         sorted_pairs = sorted(usdt_pairs, key=lambda x: x['volume'], reverse=True)
