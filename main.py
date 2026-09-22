@@ -1,75 +1,98 @@
 import streamlit as st
-import requests
 import pandas as pd
 import ta
+import ccxt
+import time
 
-st.set_page_config(page_title="Crypto EMA Crossover Scanner", layout="wide")
+st.set_page_config(page_title="Multi-Exchange EMA Scanner", layout="wide")
 st.title("📈 Crypto EMA Crossover Scanner")
-st.write("Coins with Price < EMA 200 & EMA 14 crossing above EMA 50")
+st.write("Coins with **Price < EMA 200** & **EMA 14 crossing above EMA 50**")
 
-timeframe = st.selectbox("Select Timeframe:", ["15m", "1h", "4h", "1d"], index=1)
+col1, col2, col3 = st.columns(3)
+with col1:
+    exchange_choice = st.selectbox("Select Exchange:", ["binance", "kucoin"])
+with col2:
+    timeframe = st.selectbox("Select Timeframe:", ["15m", "1h", "4h", "1d"], index=1)
+with col3:
+    coin_limit = st.number_input("Limit Coins:", min_value=10, max_value=1000, value=1000, step=50)
 
-def get_top_usdt_pairs():
-    url = "https://api.binance.com/api/v3/ticker/24hr"
+def fetch_exchange_pairs(exchange_id, limit):
     try:
-        data = requests.get(url).json()
-        usdt_pairs = [d['symbol'] for d in data if d['symbol'].endswith('USDT') and 'UP' not in d['symbol'] and 'DOWN' not in d['symbol']]
-        sorted_pairs = sorted(data, key=lambda x: float(x['quoteVolume']), reverse=True)
-        return [d['symbol'] for d in sorted_pairs if d['symbol'] in usdt_pairs][:100]
+        exchange_class = getattr(ccxt, exchange_id)()
+        tickers = exchange_class.fetch_tickers()
+        
+        # Filter only USDT pairs and sort by 24h volume
+        usdt_pairs = []
+        for symbol, ticker in tickers.items():
+            if symbol.endswith('/USDT') and 'UP/' not in symbol and 'DOWN/' not in symbol:
+                vol = ticker.get('quoteVolume') or 0
+                usdt_pairs.append({'symbol': symbol, 'volume': vol})
+        
+        # Sort by highest volume
+        sorted_pairs = sorted(usdt_pairs, key=lambda x: x['volume'], reverse=True)
+        return [item['symbol'] for item in sorted_pairs[:limit]]
     except Exception as e:
-        st.error(f"Error fetching pairs: {e}")
+        st.error(f"Error fetching pairs from {exchange_id.upper()}: {e}")
         return []
 
-def check_crossover(symbol, tf):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={tf}&limit=250"
-    data = requests.get(url).json()
-    
-    if not data or len(data) < 200:
-        return None
+def check_crossover(exchange_id, symbol, tf):
+    try:
+        exchange_class = getattr(ccxt, exchange_id)()
+        ohlcv = exchange_class.fetch_ohlcv(symbol, timeframe=tf, limit=250)
+        
+        if not ohlcv or len(ohlcv) < 200:
+            return None
 
-    df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
-    df['close'] = df['close'].astype(float)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['close'] = df['close'].astype(float)
 
-    # Indicator Calculations using `ta` library
-    df['EMA14'] = ta.trend.ema_indicator(df['close'], window=14)
-    df['EMA50'] = ta.trend.ema_indicator(df['close'], window=50)
-    df['EMA200'] = ta.trend.ema_indicator(df['close'], window=200)
+        # EMA Calculations
+        df['EMA14'] = ta.trend.ema_indicator(df['close'], window=14)
+        df['EMA50'] = ta.trend.ema_indicator(df['close'], window=50)
+        df['EMA200'] = ta.trend.ema_indicator(df['close'], window=200)
 
-    prev_row = df.iloc[-3]
-    curr_row = df.iloc[-2]
+        prev_row = df.iloc[-3]
+        curr_row = df.iloc[-2]
 
-    current_price = curr_row['close']
-    ema200 = curr_row['EMA200']
+        current_price = curr_row['close']
+        ema200 = curr_row['EMA200']
 
-    # Conditions
-    if current_price < ema200:
-        prev_cross = prev_row['EMA14'] <= prev_row['EMA50']
-        curr_cross = curr_row['EMA14'] > curr_row['EMA50']
+        # Crossover logic
+        if current_price < ema200:
+            prev_cross = prev_row['EMA14'] <= prev_row['EMA50']
+            curr_cross = curr_row['EMA14'] > curr_row['EMA50']
 
-        if prev_cross and curr_cross:
-            return {
-                "Symbol": symbol,
-                "Price": current_price,
-                "EMA14": round(curr_row['EMA14'], 4),
-                "EMA50": round(curr_row['EMA50'], 4),
-                "EMA200": round(ema200, 4)
-            }
+            if prev_cross and curr_cross:
+                return {
+                    "Exchange": exchange_id.upper(),
+                    "Symbol": symbol,
+                    "Price": current_price,
+                    "EMA 14": round(curr_row['EMA14'], 4),
+                    "EMA 50": round(curr_row['EMA50'], 4),
+                    "EMA 200": round(ema200, 4)
+                }
+    except Exception:
+        pass
     return None
 
 if st.button("Scan Market Now"):
-    st.info("Scanning Top 100 Binance Pairs...")
-    symbols = get_top_usdt_pairs()
-    results = []
+    st.info(f"Fetching Top {coin_limit} USDT Pairs from {exchange_choice.upper()}...")
+    symbols = fetch_exchange_pairs(exchange_choice, coin_limit)
     
-    progress_bar = st.progress(0)
-    for idx, symbol in enumerate(symbols):
-        res = check_crossover(symbol, timeframe)
-        if res:
-            results.append(res)
-        progress_bar.progress((idx + 1) / len(symbols))
+    if symbols:
+        st.write(f"Scanning {len(symbols)} coins...")
+        results = []
+        progress_bar = st.progress(0)
+        
+        for idx, symbol in enumerate(symbols):
+            res = check_crossover(exchange_choice, symbol, timeframe)
+            if res:
+                results.append(res)
+            progress_bar.progress((idx + 1) / len(symbols))
+            time.sleep(0.05) # Prevent rate limits
 
-    if results:
-        st.success(f"Found {len(results)} matching coins!")
-        st.dataframe(pd.DataFrame(results))
-    else:
-        st.warning("No coins matched the condition right now.")
+        if results:
+            st.success(f"Found {len(results)} matching coins!")
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
+        else:
+            st.warning("No coins matched the condition right now.")
