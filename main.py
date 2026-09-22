@@ -2,10 +2,10 @@ import streamlit as st
 import pandas as pd
 import ta
 import ccxt
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-st.set_page_config(page_title="Multi-Exchange EMA Scanner", layout="wide")
-st.title("📈 Crypto EMA Crossover Scanner")
+st.set_page_config(page_title="Fast Crypto EMA Scanner", layout="wide")
+st.title("⚡ Fast Crypto EMA Crossover Scanner")
 st.write("Coins with **Price < EMA 200** & **EMA 14 crossing above EMA 50**")
 
 col1, col2, col3 = st.columns(3)
@@ -16,19 +16,18 @@ with col2:
 with col3:
     coin_limit = st.number_input("Limit Coins:", min_value=10, max_value=1000, value=1000, step=50)
 
+@st.cache_data(ttl=300)
 def fetch_exchange_pairs(exchange_id, limit):
     try:
         exchange_class = getattr(ccxt, exchange_id)()
         tickers = exchange_class.fetch_tickers()
         
-        # Filter only USDT pairs and sort by 24h volume
         usdt_pairs = []
         for symbol, ticker in tickers.items():
             if symbol.endswith('/USDT') and 'UP/' not in symbol and 'DOWN/' not in symbol:
                 vol = ticker.get('quoteVolume') or 0
                 usdt_pairs.append({'symbol': symbol, 'volume': vol})
         
-        # Sort by highest volume
         sorted_pairs = sorted(usdt_pairs, key=lambda x: x['volume'], reverse=True)
         return [item['symbol'] for item in sorted_pairs[:limit]]
     except Exception as e:
@@ -46,7 +45,6 @@ def check_crossover(exchange_id, symbol, tf):
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['close'] = df['close'].astype(float)
 
-        # EMA Calculations
         df['EMA14'] = ta.trend.ema_indicator(df['close'], window=14)
         df['EMA50'] = ta.trend.ema_indicator(df['close'], window=50)
         df['EMA200'] = ta.trend.ema_indicator(df['close'], window=200)
@@ -57,7 +55,6 @@ def check_crossover(exchange_id, symbol, tf):
         current_price = curr_row['close']
         ema200 = curr_row['EMA200']
 
-        # Crossover logic
         if current_price < ema200:
             prev_cross = prev_row['EMA14'] <= prev_row['EMA50']
             curr_cross = curr_row['EMA14'] > curr_row['EMA50']
@@ -75,21 +72,32 @@ def check_crossover(exchange_id, symbol, tf):
         pass
     return None
 
-if st.button("Scan Market Now"):
+if st.button("🚀 Fast Scan Now"):
     st.info(f"Fetching Top {coin_limit} USDT Pairs from {exchange_choice.upper()}...")
     symbols = fetch_exchange_pairs(exchange_choice, coin_limit)
     
     if symbols:
-        st.write(f"Scanning {len(symbols)} coins...")
+        st.write(f"Scanning {len(symbols)} coins in parallel threads...")
         results = []
-        progress_bar = st.progress(0)
         
-        for idx, symbol in enumerate(symbols):
-            res = check_crossover(exchange_choice, symbol, timeframe)
-            if res:
-                results.append(res)
-            progress_bar.progress((idx + 1) / len(symbols))
-            time.sleep(0.05) # Prevent rate limits
+        progress_bar = st.progress(0)
+        completed_count = 0
+        total_coins = len(symbols)
+
+        # Multithreading for ultra-fast scanning (20 parallel requests)
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            future_to_symbol = {
+                executor.submit(check_crossover, exchange_choice, symbol, timeframe): symbol 
+                for symbol in symbols
+            }
+            
+            for future in as_completed(future_to_symbol):
+                res = future.result()
+                if res:
+                    results.append(res)
+                
+                completed_count += 1
+                progress_bar.progress(completed_count / total_coins)
 
         if results:
             st.success(f"Found {len(results)} matching coins!")
