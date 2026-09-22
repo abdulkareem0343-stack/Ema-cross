@@ -10,17 +10,32 @@ st.write("Coins with **Price < EMA 200** & **EMA 14 crossed EMA 50 within last 5
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    exchange_choice = st.selectbox("Select Exchange:", ["kucoin", "binance"])
+    exchange_choice = st.selectbox("Select Exchange:", ["binance", "kucoin"])
 with col2:
     timeframe = st.selectbox("Select Timeframe:", ["15m", "1h", "4h", "1d"], index=0)
 with col3:
-    coin_limit = st.number_input("Limit Coins:", min_value=10, max_value=1000, value=1000, step=50)
+    coin_limit = st.number_input("Limit Coins:", min_value=10, max_value=1000, value=500, step=50)
+
+def get_exchange_instance(exchange_id):
+    if exchange_id == 'binance':
+        return ccxt.binance({
+            'enableRateLimit': False,
+            'timeout': 5000,
+            'urls': {
+                'api': {
+                    'public': 'https://data-api.binance.vision/api/v3',
+                    'fapiPublic': 'https://fapi.binance.com/fapi/v1'
+                }
+            }
+        })
+    else:
+        return getattr(ccxt, exchange_id)({'enableRateLimit': False, 'timeout': 5000})
 
 @st.cache_data(ttl=300)
 def fetch_exchange_pairs(exchange_id, limit):
     try:
-        exchange_class = getattr(ccxt, exchange_id)({'enableRateLimit': False})
-        tickers = exchange_class.fetch_tickers()
+        exchange = get_exchange_instance(exchange_id)
+        tickers = exchange.fetch_tickers()
         
         usdt_pairs = []
         for symbol, ticker in tickers.items():
@@ -36,8 +51,7 @@ def fetch_exchange_pairs(exchange_id, limit):
 
 def process_single_coin(exchange_id, symbol, tf):
     try:
-        # Reduced limit to 100 candles for 3x faster response per API call
-        exchange = getattr(ccxt, exchange_id)({'enableRateLimit': False, 'timeout': 5000})
+        exchange = get_exchange_instance(exchange_id)
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=100)
         
         if not ohlcv or len(ohlcv) < 60:
@@ -53,14 +67,12 @@ def process_single_coin(exchange_id, symbol, tf):
         current_price = df.iloc[-1]['close']
         ema200 = df.iloc[-1]['EMA200']
 
-        # Skip if price is above EMA200 early to save processing time
         if current_price >= ema200:
             return None
 
         status = None
         crossed_candle_ago = None
 
-        # Check last 5 candles for crossover
         for i in range(1, 6):
             prev = df.iloc[-(i + 2)]
             curr = df.iloc[-(i + 1)]
@@ -70,7 +82,6 @@ def process_single_coin(exchange_id, symbol, tf):
                 status = f"🚀 Bullish Cross ({i}c ago)"
                 break
 
-        # Check for near crossover
         if not status:
             row_0 = df.iloc[-1]
             diff_percent = abs(row_0['EMA14'] - row_0['EMA50']) / row_0['EMA50'] * 100
@@ -103,8 +114,7 @@ if st.button("🚀 Fast Scan Now"):
         completed_count = 0
         total_coins = len(symbols)
 
-        # Increased workers to 40 for parallel high-speed execution
-        with ThreadPoolExecutor(max_workers=40) as executor:
+        with ThreadPoolExecutor(max_workers=30) as executor:
             future_to_symbol = {
                 executor.submit(process_single_coin, exchange_choice, symbol, timeframe): symbol 
                 for symbol in symbols
@@ -118,7 +128,6 @@ if st.button("🚀 Fast Scan Now"):
                 completed_count += 1
                 progress_bar.progress(completed_count / total_coins)
 
-        # METRICS
         st.write("---")
         m1, m2, m3 = st.columns(3)
         m1.metric("Scanned", f"{len(symbols)}")
