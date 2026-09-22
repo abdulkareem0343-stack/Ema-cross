@@ -4,9 +4,9 @@ import ta
 import ccxt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-st.set_page_config(page_title="Fast Crypto EMA Scanner", layout="wide")
-st.title("⚡ Fast Crypto EMA Crossover Scanner")
-st.write("Coins with **Price < EMA 200** & **EMA 14 crossing/near EMA 50**")
+st.set_page_config(page_title="Advanced Crypto EMA Scanner", layout="wide")
+st.title("⚡ Advanced Crypto EMA Crossover Scanner")
+st.write("Coins with **Price < EMA 200** & **EMA 14 crossed EMA 50 within last 5 candles**")
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -49,42 +49,41 @@ def check_crossover(exchange_id, symbol, tf):
         df['EMA50'] = ta.trend.ema_indicator(df['close'], window=50)
         df['EMA200'] = ta.trend.ema_indicator(df['close'], window=200)
 
-        # Check last few candles
-        row_0 = df.iloc[-1] # Current Live
-        row_1 = df.iloc[-2] # Last Closed
-        row_2 = df.iloc[-3] # 2nd Last
-        row_3 = df.iloc[-4] # 3rd Last
+        current_price = df.iloc[-1]['close']
+        ema200 = df.iloc[-1]['EMA200']
 
-        current_price = row_0['close']
-        ema200 = row_0['EMA200']
-
-        # Rule 1: Price must be strictly BELOW EMA 200
+        # Rule 1: Price strictly below EMA 200
         if current_price < ema200:
-            
-            # Check 1: Fresh Crossover in last 3 candles
-            cross_1 = (row_2['EMA14'] <= row_2['EMA50']) and (row_1['EMA14'] > row_1['EMA50'])
-            cross_2 = (row_3['EMA14'] <= row_3['EMA50']) and (row_2['EMA14'] > row_2['EMA50'])
-            
-            # Check 2: Near Crossover (EMA 14 is just below EMA 50, distance < 0.2%)
-            diff_percent = abs(row_0['EMA14'] - row_0['EMA50']) / row_0['EMA50'] * 100
-            is_near = (row_0['EMA14'] < row_0['EMA50']) and (diff_percent <= 0.2)
+            status = None
+            crossed_candle_ago = None
 
-            status = ""
-            if cross_1:
-                status = "🚀 Bullish Cross (1 candle ago)"
-            elif cross_2:
-                status = "🚀 Bullish Cross (2 candles ago)"
-            elif is_near:
-                status = "👀 About to Cross (Near)"
+            # Rule 2: Check Crossover in last 5 candles (idx: -2 to -6)
+            for i in range(1, 6):
+                prev = df.iloc[-(i + 2)]
+                curr = df.iloc[-(i + 1)]
 
-            if status != "":
+                if (prev['EMA14'] <= prev['EMA50']) and (curr['EMA14'] > curr['EMA50']):
+                    crossed_candle_ago = i
+                    status = f"🚀 Bullish Cross ({i} candle{'s' if i > 1 else ''} ago)"
+                    break
+
+            # Near Crossover Check (if not crossed yet)
+            if not status:
+                row_0 = df.iloc[-1]
+                diff_percent = abs(row_0['EMA14'] - row_0['EMA50']) / row_0['EMA50'] * 100
+                if (row_0['EMA14'] < row_0['EMA50']) and (diff_percent <= 0.2):
+                    status = "👀 About to Cross (Near)"
+                    crossed_candle_ago = 0
+
+            if status:
                 return {
                     "Exchange": exchange_id.upper(),
                     "Symbol": symbol,
                     "Status": status,
+                    "Candles Ago": crossed_candle_ago if crossed_candle_ago is not None else "Near",
                     "Price": current_price,
-                    "EMA 14": round(row_0['EMA14'], 4),
-                    "EMA 50": round(row_0['EMA50'], 4),
+                    "EMA 14": round(df.iloc[-1]['EMA14'], 4),
+                    "EMA 50": round(df.iloc[-1]['EMA50'], 4),
                     "EMA 200": round(ema200, 4)
                 }
     except Exception:
@@ -96,9 +95,7 @@ if st.button("🚀 Fast Scan Now"):
     symbols = fetch_exchange_pairs(exchange_choice, coin_limit)
     
     if symbols:
-        st.write(f"Scanning {len(symbols)} coins...")
         results = []
-        
         progress_bar = st.progress(0)
         completed_count = 0
         total_coins = len(symbols)
@@ -117,8 +114,18 @@ if st.button("🚀 Fast Scan Now"):
                 completed_count += 1
                 progress_bar.progress(completed_count / total_coins)
 
+        # --- ADVANCED METRICS BOXES ---
+        st.write("---")
+        m1, m2, m3 = st.columns(3)
+        m1.metric(label="Total Scanned", value=f"{len(symbols)} Coins")
+        m2.metric(label="Matches Found", value=f"{len(results)} Coins", delta=f"{len(results)} Opportunities" if results else "0")
+        
+        fresh_crosses = len([r for r in results if isinstance(r['Candles Ago'], int) and r['Candles Ago'] <= 2])
+        m3.metric(label="Fresh Crosses (1-2 Candles)", value=f"{fresh_crosses}")
+        st.write("---")
+
         if results:
-            st.success(f"Found {len(results)} matching coins!")
-            st.dataframe(pd.DataFrame(results), use_container_width=True)
+            df_results = pd.DataFrame(results).sort_values(by="Candles Ago", ascending=True)
+            st.dataframe(df_results, use_container_width=True)
         else:
-            st.warning("No coins matched right now. Try switching the Timeframe (e.g., 1h or 4h).")
+            st.warning("No coins matched the condition within last 5 candles.")
