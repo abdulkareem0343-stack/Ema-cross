@@ -52,27 +52,24 @@ def check_crossover(exchange_id, symbol, tf):
         current_price = df.iloc[-1]['close']
         ema200 = df.iloc[-1]['EMA200']
 
-        # Rule 1: Price strictly below EMA 200
         if current_price < ema200:
             status = None
             crossed_candle_ago = None
 
-            # Rule 2: Check Crossover in last 5 candles
             for i in range(1, 6):
                 prev = df.iloc[-(i + 2)]
                 curr = df.iloc[-(i + 1)]
 
                 if (prev['EMA14'] <= prev['EMA50']) and (curr['EMA14'] > curr['EMA50']):
                     crossed_candle_ago = i
-                    status = f"🚀 Bullish Cross ({i} candle{'s' if i > 1 else ''} ago)"
+                    status = f"🚀 Bullish Cross ({i}c ago)"
                     break
 
-            # Near Crossover Check
             if not status:
                 row_0 = df.iloc[-1]
                 diff_percent = abs(row_0['EMA14'] - row_0['EMA50']) / row_0['EMA50'] * 100
                 if (row_0['EMA14'] < row_0['EMA50']) and (diff_percent <= 0.2):
-                    status = "👀 About to Cross (Near)"
+                    status = "👀 Near Cross"
                     crossed_candle_ago = 0
 
             if status:
@@ -114,43 +111,48 @@ if st.button("🚀 Fast Scan Now"):
                 completed_count += 1
                 progress_bar.progress(completed_count / total_coins)
 
-        # --- SUMMARY METRICS ---
+        # METRICS
         st.write("---")
         m1, m2, m3 = st.columns(3)
-        m1.metric(label="Total Scanned", value=f"{len(symbols)} Coins")
-        m2.metric(label="Matches Found", value=f"{len(results)} Coins", delta=f"{len(results)} Opportunities" if results else "0")
-        
+        m1.metric("Scanned", f"{len(symbols)}")
+        m2.metric("Matches", f"{len(results)}")
         fresh_crosses = len([r for r in results if r['Candles Ago'] <= 2])
-        m3.metric(label="Fresh Crosses (1-2 Candles)", value=f"{fresh_crosses}")
+        m3.metric("Fresh (1-2c)", f"{fresh_crosses}")
         st.write("---")
 
         if results:
-            # Sort results by recent crossover
             sorted_results = sorted(results, key=lambda x: x['Candles Ago'])
+            st.subheader("🎯 Matched Opportunities")
             
-            st.subheader("🎯 Matched Opportunities Cards")
-            
-            # Grid Layout: Displaying 3 Coin Cards per Row
-            cols_per_row = 3
-            for i in range(0, len(sorted_results), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for j in range(cols_per_row):
-                    if i + j < len(sorted_results):
-                        coin = sorted_results[i + j]
-                        with cols[j]:
-                            with st.container(border=True):
-                                st.markdown(f"### 🪙 {coin['Symbol']}")
-                                st.caption(f"Exchange: **{coin['Exchange']}** | Timeframe: **{timeframe}**")
-                                st.success(f"{coin['Status']}")
-                                
-                                # Details inside the card
-                                c1, c2 = st.columns(2)
-                                c1.metric("Current Price", f"${coin['Price']}")
-                                c2.metric("EMA 200", f"${coin['EMA200']}")
-                                
-                                st.write("---")
-                                sub_c1, sub_c2 = st.columns(2)
-                                sub_c1.write(f"**EMA 14:** `{coin['EMA14']}`")
-                                sub_c2.write(f"**EMA 50:** `{coin['EMA50']}`")
+            # Ultra-Compact Mini Boxes
+            for coin in sorted_results:
+                badge_color = "#10b981" if "Bullish" in coin['Status'] else "#f59e0b"
+                
+                card_html = f"""
+                <div style="
+                    border: 1px solid #334155; 
+                    border-radius: 8px; 
+                    padding: 10px 14px; 
+                    margin-bottom: 8px; 
+                    background-color: #1e293b;
+                    color: white;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 16px; font-weight: bold; color: #f8fafc;">🪙 {coin['Symbol']}</span>
+                        <span style="background-color: {badge_color}; color: black; font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: bold;">{coin['Status']}</span>
+                    </div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">
+                        {coin['Exchange']} | {timeframe}
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px;">
+                        <div><b>Price:</b> <span style="color: #38bdf8;">${coin['Price']}</span></div>
+                        <div><b>EMA 200:</b> <span style="color: #f43f5e;">${coin['EMA200']}</span></div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 12px; color: #cbd5e1;">
+                        <span>EMA 14: <b>{coin['EMA14']}</b></span>
+                        <span>EMA 50: <b>{coin['EMA50']}</b></span>
+                    </div>
+                </div>
+                """
+                st.markdown(card_html, unsafe_allow_html=True)
         else:
-            st.warning("No coins matched the condition within last 5 candles.")
+            st.warning("No coins matched the condition right now.")
