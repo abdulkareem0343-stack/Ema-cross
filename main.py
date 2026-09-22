@@ -4,8 +4,8 @@ import ta
 import ccxt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-st.set_page_config(page_title="Advanced Crypto EMA Scanner", layout="wide")
-st.title("⚡ Advanced Crypto EMA Crossover Scanner")
+st.set_page_config(page_title="Ultra-Fast EMA Scanner", layout="wide")
+st.title("⚡ Ultra-Fast Crypto EMA Crossover Scanner")
 st.write("Coins with **Price < EMA 200** & **EMA 14 crossed EMA 50 within last 5 candles**")
 
 col1, col2, col3 = st.columns(3)
@@ -14,12 +14,12 @@ with col1:
 with col2:
     timeframe = st.selectbox("Select Timeframe:", ["15m", "1h", "4h", "1d"], index=0)
 with col3:
-    coin_limit = st.number_input("Limit Coins:", min_value=10, max_value=1000, value=500, step=50)
+    coin_limit = st.number_input("Limit Coins:", min_value=10, max_value=1000, value=1000, step=50)
 
 @st.cache_data(ttl=300)
 def fetch_exchange_pairs(exchange_id, limit):
     try:
-        exchange_class = getattr(ccxt, exchange_id)()
+        exchange_class = getattr(ccxt, exchange_id)({'enableRateLimit': False})
         tickers = exchange_class.fetch_tickers()
         
         usdt_pairs = []
@@ -34,12 +34,13 @@ def fetch_exchange_pairs(exchange_id, limit):
         st.error(f"Error fetching pairs from {exchange_id.upper()}: {e}")
         return []
 
-def check_crossover(exchange_id, symbol, tf):
+def process_single_coin(exchange_id, symbol, tf):
     try:
-        exchange_class = getattr(ccxt, exchange_id)()
-        ohlcv = exchange_class.fetch_ohlcv(symbol, timeframe=tf, limit=250)
+        # Reduced limit to 100 candles for 3x faster response per API call
+        exchange = getattr(ccxt, exchange_id)({'enableRateLimit': False, 'timeout': 5000})
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=100)
         
-        if not ohlcv or len(ohlcv) < 200:
+        if not ohlcv or len(ohlcv) < 60:
             return None
 
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -52,37 +53,42 @@ def check_crossover(exchange_id, symbol, tf):
         current_price = df.iloc[-1]['close']
         ema200 = df.iloc[-1]['EMA200']
 
-        if current_price < ema200:
-            status = None
-            crossed_candle_ago = None
+        # Skip if price is above EMA200 early to save processing time
+        if current_price >= ema200:
+            return None
 
-            for i in range(1, 6):
-                prev = df.iloc[-(i + 2)]
-                curr = df.iloc[-(i + 1)]
+        status = None
+        crossed_candle_ago = None
 
-                if (prev['EMA14'] <= prev['EMA50']) and (curr['EMA14'] > curr['EMA50']):
-                    crossed_candle_ago = i
-                    status = f"🚀 Bullish Cross ({i}c ago)"
-                    break
+        # Check last 5 candles for crossover
+        for i in range(1, 6):
+            prev = df.iloc[-(i + 2)]
+            curr = df.iloc[-(i + 1)]
 
-            if not status:
-                row_0 = df.iloc[-1]
-                diff_percent = abs(row_0['EMA14'] - row_0['EMA50']) / row_0['EMA50'] * 100
-                if (row_0['EMA14'] < row_0['EMA50']) and (diff_percent <= 0.2):
-                    status = "👀 Near Cross"
-                    crossed_candle_ago = 0
+            if (prev['EMA14'] <= prev['EMA50']) and (curr['EMA14'] > curr['EMA50']):
+                crossed_candle_ago = i
+                status = f"🚀 Bullish Cross ({i}c ago)"
+                break
 
-            if status:
-                return {
-                    "Exchange": exchange_id.upper(),
-                    "Symbol": symbol,
-                    "Status": status,
-                    "Candles Ago": crossed_candle_ago if crossed_candle_ago is not None else 99,
-                    "Price": current_price,
-                    "EMA14": round(df.iloc[-1]['EMA14'], 4),
-                    "EMA50": round(df.iloc[-1]['EMA50'], 4),
-                    "EMA200": round(ema200, 4)
-                }
+        # Check for near crossover
+        if not status:
+            row_0 = df.iloc[-1]
+            diff_percent = abs(row_0['EMA14'] - row_0['EMA50']) / row_0['EMA50'] * 100
+            if (row_0['EMA14'] < row_0['EMA50']) and (diff_percent <= 0.2):
+                status = "👀 Near Cross"
+                crossed_candle_ago = 0
+
+        if status:
+            return {
+                "Exchange": exchange_id.upper(),
+                "Symbol": symbol,
+                "Status": status,
+                "Candles Ago": crossed_candle_ago if crossed_candle_ago is not None else 99,
+                "Price": current_price,
+                "EMA14": round(df.iloc[-1]['EMA14'], 4),
+                "EMA50": round(df.iloc[-1]['EMA50'], 4),
+                "EMA200": round(ema200, 4)
+            }
     except Exception:
         pass
     return None
@@ -97,9 +103,10 @@ if st.button("🚀 Fast Scan Now"):
         completed_count = 0
         total_coins = len(symbols)
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        # Increased workers to 40 for parallel high-speed execution
+        with ThreadPoolExecutor(max_workers=40) as executor:
             future_to_symbol = {
-                executor.submit(check_crossover, exchange_choice, symbol, timeframe): symbol 
+                executor.submit(process_single_coin, exchange_choice, symbol, timeframe): symbol 
                 for symbol in symbols
             }
             
@@ -124,7 +131,6 @@ if st.button("🚀 Fast Scan Now"):
             sorted_results = sorted(results, key=lambda x: x['Candles Ago'])
             st.subheader("🎯 Matched Opportunities")
             
-            # Ultra-Compact Mini Boxes
             for coin in sorted_results:
                 badge_color = "#10b981" if "Bullish" in coin['Status'] else "#f59e0b"
                 
@@ -132,22 +138,22 @@ if st.button("🚀 Fast Scan Now"):
                 <div style="
                     border: 1px solid #334155; 
                     border-radius: 8px; 
-                    padding: 10px 14px; 
-                    margin-bottom: 8px; 
+                    padding: 8px 12px; 
+                    margin-bottom: 6px; 
                     background-color: #1e293b;
                     color: white;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 16px; font-weight: bold; color: #f8fafc;">🪙 {coin['Symbol']}</span>
-                        <span style="background-color: {badge_color}; color: black; font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: bold;">{coin['Status']}</span>
+                        <span style="font-size: 15px; font-weight: bold; color: #f8fafc;">🪙 {coin['Symbol']}</span>
+                        <span style="background-color: {badge_color}; color: black; font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: bold;">{coin['Status']}</span>
                     </div>
-                    <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">
+                    <div style="font-size: 11px; color: #94a3b8; margin-top: 1px;">
                         {coin['Exchange']} | {timeframe}
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px;">
+                    <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px;">
                         <div><b>Price:</b> <span style="color: #38bdf8;">${coin['Price']}</span></div>
                         <div><b>EMA 200:</b> <span style="color: #f43f5e;">${coin['EMA200']}</span></div>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 12px; color: #cbd5e1;">
+                    <div style="display: flex; justify-content: space-between; margin-top: 3px; font-size: 11px; color: #cbd5e1;">
                         <span>EMA 14: <b>{coin['EMA14']}</b></span>
                         <span>EMA 50: <b>{coin['EMA50']}</b></span>
                     </div>
